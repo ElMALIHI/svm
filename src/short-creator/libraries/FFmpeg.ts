@@ -1,56 +1,14 @@
-import ffmpeg from "fluent-ffmpeg"; // v2.1.3
+import ffmpeg from "fluent-ffmpeg";
 import { Readable } from "node:stream";
 import { logger } from "../../logger";
-import { execSync } from "child_process";
 
 export class FFMpeg {
-  private static gpuAccelerated = false;
-
   static async init(): Promise<FFMpeg> {
     return import("@ffmpeg-installer/ffmpeg").then((ffmpegInstaller) => {
       ffmpeg.setFfmpegPath(ffmpegInstaller.path);
-      
-      // Check for T4 GPU and configure hardware acceleration
-      try {
-        const nvidiaCheck = execSync('nvidia-smi --query-gpu=name --format=csv,noheader').toString().trim();
-        if (nvidiaCheck.includes('T4')) {
-          logger.info("NVIDIA T4 GPU detected, enabling hardware acceleration");
-          this.gpuAccelerated = true;
-          
-          // Verify NVENC support
-          const codecs = execSync(`${ffmpegInstaller.path} -codecs`).toString();
-          if (!codecs.includes('nvenc')) {
-            logger.warn("NVENC not available in FFmpeg build");
-            this.gpuAccelerated = false;
-          }
-        }
-      } catch (error) {
-        logger.warn({ error }, "GPU detection failed, using CPU");
-      }
-
-      logger.info("FFmpeg initialized", {
-        path: ffmpegInstaller.path,
-        gpuAccelerated: this.gpuAccelerated,
-        version: ffmpegInstaller.version
-      });
-      
+      logger.info("FFmpeg path set to:", ffmpegInstaller.path);
       return new FFMpeg();
     });
-  }
-
-  private getAudioCommand(input: Readable) {
-    const command = ffmpeg(input);
-    
-    if (FFMpeg.gpuAccelerated) {
-      command
-        .outputOptions([
-          '-hwaccel cuda',
-          '-hwaccel_output_format cuda',
-          '-c:a aac', // Use GPU-accelerated codec when available
-        ]);
-    }
-    
-    return command;
   }
 
   async saveNormalizedAudio(
@@ -63,20 +21,18 @@ export class FFMpeg {
     inputStream.push(null);
 
     return new Promise((resolve, reject) => {
-      this.getAudioCommand(inputStream)
+      ffmpeg()
+        .input(inputStream)
         .audioCodec("pcm_s16le")
         .audioChannels(1)
         .audioFrequency(16000)
         .toFormat("wav")
         .on("end", () => {
-          logger.debug("Audio normalization complete", {
-            outputPath,
-            gpuAccelerated: FFMpeg.gpuAccelerated
-          });
+          logger.debug("Audio normalization complete");
           resolve(outputPath);
         })
         .on("error", (err) => {
-          logger.error(err, "Error normalizing audio");
+          logger.error(err, "Error normalizing audio:");
           reject(err);
         })
         .save(outputPath);
@@ -87,31 +43,29 @@ export class FFMpeg {
     const inputStream = new Readable();
     inputStream.push(Buffer.from(audio));
     inputStream.push(null);
-    
     return new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      const command = this.getAudioCommand(inputStream)
+      const chunk: Buffer[] = [];
+
+      ffmpeg()
+        .input(inputStream)
         .audioCodec("libmp3lame")
         .audioBitrate(128)
         .audioChannels(2)
-        .toFormat("mp3");
-
-      if (FFMpeg.gpuAccelerated) {
-        command.outputOptions([
-          '-c:a aac', // Use GPU-accelerated codec
-          '-b:a 128k'
-        ]);
-      }
-
-      command
-        .on("error", reject)
+        .toFormat("mp3")
+        .on("error", (err) => {
+          reject(err);
+        })
         .pipe()
-        .on("data", (data: Buffer) => chunks.push(data))
+        .on("data", (data: Buffer) => {
+          chunk.push(data);
+        })
         .on("end", () => {
-          const buffer = Buffer.concat(chunks);
+          const buffer = Buffer.concat(chunk);
           resolve(`data:audio/mp3;base64,${buffer.toString("base64")}`);
         })
-        .on("error", reject);
+        .on("error", (err) => {
+          reject(err);
+        });
     });
   }
 
@@ -119,31 +73,21 @@ export class FFMpeg {
     const inputStream = new Readable();
     inputStream.push(Buffer.from(audio));
     inputStream.push(null);
-
     return new Promise((resolve, reject) => {
-      const command = this.getAudioCommand(inputStream)
+      ffmpeg()
+        .input(inputStream)
         .audioCodec("libmp3lame")
         .audioBitrate(128)
         .audioChannels(2)
-        .toFormat("mp3");
-
-      if (FFMpeg.gpuAccelerated) {
-        command.outputOptions([
-          '-c:a aac',
-          '-b:a 128k'
-        ]);
-      }
-
-      command
+        .toFormat("mp3")
+        .save(filePath)
         .on("end", () => {
-          logger.debug("MP3 conversion complete", {
-            filePath,
-            gpuAccelerated: FFMpeg.gpuAccelerated
-          });
+          logger.debug("Audio conversion complete");
           resolve(filePath);
         })
-        .on("error", reject)
-        .save(filePath);
+        .on("error", (err) => {
+          reject(err);
+        });
     });
   }
 }
