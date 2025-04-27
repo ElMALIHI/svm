@@ -36,16 +36,24 @@ export class Whisper {
     logger.debug({ audioPath }, "Starting to transcribe audio with GPU acceleration");
     
     try {
-      // Create a temporary Python script to run the transcription
+      // Ensure the whisper directory exists
+      await fs.ensureDir(this.config.whisperInstallPath);
+      
+      // Create the Python script path
       const scriptPath = path.join(this.config.whisperInstallPath, 'transcribe_gpu.py');
       
       const pythonScript = `
 from faster_whisper import WhisperModel
 import json
 import sys
+import os
 
 model_size = "${this.config.whisperModel}"
-audio_path = "${audioPath}"
+audio_path = "${audioPath.replace(/\\/g, '\\\\')}"  # Handle path escaping
+
+# Verify audio file exists
+if not os.path.exists(audio_path):
+    raise FileNotFoundError(f"Audio file not found at {audio_path}")
 
 # Run on GPU with FP16
 model = WhisperModel(model_size, device="cuda", compute_type="float16")
@@ -58,16 +66,22 @@ for segment in segments:
         output.append({
             "text": word.word,
             "start": word.start * 1000,  # convert to ms
-            "end": word.end * 1000      # convert to ms
+            "end": word.end * 1000       # convert to ms
         })
 
 print(json.dumps(output))
       `;
 
+      // Write the script file
       await fs.writeFile(scriptPath, pythonScript);
       
+      // Verify the script was created
+      if (!fs.existsSync(scriptPath)) {
+        throw new Error(`Failed to create transcription script at ${scriptPath}`);
+      }
+
       // Execute the Python script
-      const output = execSync(`python ${scriptPath}`).toString();
+      const output = execSync(`python ${scriptPath}`, { stdio: 'pipe' }).toString();
       const words = JSON.parse(output) as Array<{text: string, start: number, end: number}>;
       
       logger.debug({ audioPath }, "Transcription finished, creating captions");
