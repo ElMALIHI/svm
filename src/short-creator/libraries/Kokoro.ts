@@ -2,7 +2,7 @@ import { KokoroTTS } from "kokoro-js";
 import type { Voices } from "../../types/shorts";
 import { logger } from "../../config";
 
-const MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
+const MODEL = "hexgrad/Kokoro-82M";
 const D_TYPE = "fp32"; // Options: "fp32", "fp16", "q8", "q4", "q4f16"
 
 export class Kokoro {
